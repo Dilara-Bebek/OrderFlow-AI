@@ -138,34 +138,152 @@ def ensure_state() -> None:
         st.session_state.last_complete_order = None
 
 
-def render_admin_dashboard() -> None:
-    st.title("Gelen Siparisler")
-    db_path = "orderflow_ai.db"
-
-    if not os.path.exists(db_path):
-        st.info("Henüz sipariş bulunmamaktadır.")
-        return
-
-    try:
-        with sqlite3.connect(db_path) as conn:
-            table_check = pd.read_sql_query(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name='orders'",
-                conn,
+def init_db(db_path: str = "orderflow_ai.db") -> None:
+    with sqlite3.connect(db_path) as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS customers (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                customer_name TEXT,
+                city TEXT,
+                address TEXT
             )
-            if table_check.empty:
-                st.info("Henüz sipariş bulunmamaktadır.")
-                return
+            """
+        )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS orders (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                customer_id INTEGER,
+                status TEXT
+            )
+            """
+        )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS order_items (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                order_id INTEGER,
+                product_name TEXT,
+                quantity INTEGER
+            )
+            """
+        )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS products (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                product_name TEXT,
+                stock INTEGER
+            )
+            """
+        )
 
-            df = pd.read_sql_query("SELECT * FROM orders", conn)
-    except Exception:
-        st.info("Henüz sipariş bulunmamaktadır.")
-        return
+        cursor.execute("SELECT COUNT(*) FROM products")
+        product_count = int(cursor.fetchone()[0])
+        if product_count == 0:
+            seed_data = [
+                ("Limon Kolonyası", 150),
+                ("Gül Kremi", 80),
+                ("Zeytinyağlı Sabun", 200),
+                ("Gül Suyu", 100),
+            ]
+            cursor.executemany(
+                "INSERT INTO products (product_name, stock) VALUES (?, ?)",
+                seed_data,
+            )
+            conn.commit()
 
-    if df.empty:
-        st.info("Henüz sipariş bulunmamaktadır.")
-        return
 
-    st.dataframe(df, use_container_width=True, hide_index=True)
+def save_complete_order_to_db(order_payload: dict[str, Any], db_path: str = "orderflow_ai.db") -> int:
+    data = order_payload["data"]
+    customer_name = str(data["customer_name"]).strip()
+    city = str(data["city"]).strip()
+    address = str(data["address"]).strip()
+    items = data["items"]
+
+    with sqlite3.connect(db_path) as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO customers (customer_name, city, address)
+            VALUES (?, ?, ?)
+            """,
+            (customer_name, city, address),
+        )
+        customer_id = int(cursor.lastrowid)
+        cursor.execute(
+            """
+            INSERT INTO orders (customer_id, status)
+            VALUES (?, ?)
+            """,
+            (customer_id, "Bekliyor"),
+        )
+        order_id = int(cursor.lastrowid)
+        for item in items:
+            cursor.execute(
+                """
+                INSERT INTO order_items (order_id, product_name, quantity)
+                VALUES (?, ?, ?)
+                """,
+                (order_id, str(item["product_name"]).strip(), int(item["quantity"])),
+            )
+        conn.commit()
+    return order_id
+
+
+def render_admin_dashboard() -> None:
+    st.title("Admin Dashboard")
+    tab_orders, tab_stock = st.tabs(["Sipariş Yönetimi", "Ürün Stok Durumu"])
+
+    with sqlite3.connect("orderflow_ai.db") as conn:
+        with tab_orders:
+            orders_query = """
+                SELECT o.id, c.customer_name, c.city, c.address, oi.product_name, oi.quantity, o.status FROM orders o JOIN customers c ON o.customer_id = c.id JOIN order_items oi ON o.id = oi.order_id ORDER BY o.id DESC
+            """
+            orders_df = pd.read_sql_query(orders_query, conn)
+            if orders_df.empty:
+                st.info("Sipariş yok")
+            else:
+                edited_df = st.data_editor(
+                    orders_df,
+                    use_container_width=True,
+                    hide_index=True,
+                    key="orders_status_editor",
+                    column_config={
+                        "status": st.column_config.SelectboxColumn(
+                            "status",
+                            options=[
+                                "Bekliyor",
+                                "Onaylandı",
+                                "Reddedildi",
+                                "Hazırlanıyor",
+                                "Kargoya Verildi",
+                            ],
+                            required=True,
+                        )
+                    },
+                    disabled=["id", "customer_name", "city", "address", "product_name", "quantity"],
+                )
+
+                status_changes = edited_df.loc[
+                    edited_df["status"] != orders_df["status"], ["id", "status"]
+                ].drop_duplicates(subset=["id"], keep="last")
+
+                if not status_changes.empty:
+                    conn.executemany(
+                        "UPDATE orders SET status = ? WHERE id = ?",
+                        [(row["status"], int(row["id"])) for _, row in status_changes.iterrows()],
+                    )
+                    conn.commit()
+                    st.toast("Sipariş durumu başarıyla güncellendi!")
+                    st.rerun()
+
+        with tab_stock:
+            stock_query = 'SELECT product_name as "Ürün Adı", stock as "Stok" FROM products'
+            stock_df = pd.read_sql_query(stock_query, conn)
+            st.dataframe(stock_df, use_container_width=True)
 
 
 def apply_whatsapp_css() -> None:
@@ -259,6 +377,32 @@ def parse_complete_order_json(text: str) -> dict[str, Any] | None:
     return payload
 
 
+def render_order_receipt(order_payload: dict[str, Any]) -> None:
+    data = order_payload.get("data", {})
+    customer_name = data.get("customer_name", "-")
+    city = data.get("city", "-")
+    address = data.get("address", "-")
+    items = data.get("items", [])
+
+    st.markdown("### Siparis Ozeti Fisi")
+    summary_df = pd.DataFrame(
+        [
+            {"Alan": "Musteri Adi", "Deger": customer_name},
+            {"Alan": "Sehir", "Deger": city},
+            {"Alan": "Adres", "Deger": address},
+        ]
+    )
+    st.table(summary_df)
+
+    item_rows = []
+    for item in items:
+        quantity = item.get("quantity", "-")
+        product_name = item.get("product_name", "-")
+        item_rows.append({"Alinan Urunler": f"{quantity} - {product_name}"})
+    if item_rows:
+        st.table(pd.DataFrame(item_rows))
+
+
 def render_chat() -> None:
     st.title("OrderFlow AI - WhatsApp Business Simulasyonu")
     st.caption("Gemini destekli siparis asistani")
@@ -271,8 +415,8 @@ def render_chat() -> None:
     user_text = st.chat_input("Mesajinizi yazin...")
     if not user_text:
         if st.session_state.last_complete_order:
-            st.success("✅ Siparis basariyla veritabanina iletilecek formata cevrildi!")
-            st.json(st.session_state.last_complete_order)
+            st.success("✅ Siparişiniz başarıyla oluşturuldu!")
+            render_order_receipt(st.session_state.last_complete_order)
         return
 
     st.session_state.messages.append({"role": "user", "content": user_text, "ts": now_ts()})
@@ -289,9 +433,13 @@ def render_chat() -> None:
 
     parsed = parse_complete_order_json(reply)
     if parsed is not None:
-        st.session_state.last_complete_order = parsed
-        st.success("✅ Siparis basariyla veritabanina iletilecek formata cevrildi!")
-        st.json(parsed)
+        try:
+            save_complete_order_to_db(parsed)
+            st.session_state.last_complete_order = parsed
+            st.success("Sipariş fişi başarıyla oluşturuldu")
+            render_order_receipt(parsed)
+        except Exception as exc:
+            st.error(f"Sipariş kaydedilirken hata oluştu: {exc}")
         return
 
     if not reply:
@@ -305,6 +453,7 @@ def render_chat() -> None:
 
 
 def main() -> None:
+    init_db()
     st.set_page_config(page_title="OrderFlow AI", page_icon="💬", layout="centered")
     ensure_state()
     apply_whatsapp_css()
