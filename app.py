@@ -234,10 +234,55 @@ def save_complete_order_to_db(order_payload: dict[str, Any], db_path: str = "ord
 
 
 def render_admin_dashboard() -> None:
-    st.title("Admin Dashboard")
+    st.title("OrderFlow AI | Isletme Yonetim Portali")
+    st.caption("Operasyon, siparis ve musteri analiz paneli")
     tab_orders, tab_stock = st.tabs(["Sipariş Yönetimi", "Ürün Stok Durumu"])
 
     with sqlite3.connect("orderflow_ai.db") as conn:
+        total_orders = int(
+            pd.read_sql_query("SELECT COUNT(*) AS cnt FROM orders", conn).iloc[0]["cnt"]
+        )
+        pending_orders = int(
+            pd.read_sql_query(
+                "SELECT COUNT(*) AS cnt FROM orders WHERE status = 'Bekliyor'", conn
+            ).iloc[0]["cnt"]
+        )
+        order_item_columns = {
+            row["name"]
+            for _, row in pd.read_sql_query("PRAGMA table_info(order_items)", conn).iterrows()
+        }
+        if "price" in order_item_columns:
+            total_revenue = float(
+                pd.read_sql_query(
+                    "SELECT COALESCE(SUM(quantity * price), 0) AS total FROM order_items",
+                    conn,
+                ).iloc[0]["total"]
+            )
+            third_metric_label = "Toplam Ciro"
+            third_metric_value = f"{total_revenue:,.0f} TL".replace(",", ".")
+        elif "unit_price" in order_item_columns:
+            total_revenue = float(
+                pd.read_sql_query(
+                    "SELECT COALESCE(SUM(quantity * unit_price), 0) AS total FROM order_items",
+                    conn,
+                ).iloc[0]["total"]
+            )
+            third_metric_label = "Toplam Ciro"
+            third_metric_value = f"{total_revenue:,.0f} TL".replace(",", ".")
+        else:
+            active_customers = int(
+                pd.read_sql_query(
+                    "SELECT COUNT(DISTINCT customer_id) AS cnt FROM orders", conn
+                ).iloc[0]["cnt"]
+            )
+            third_metric_label = "Aktif Musteri"
+            third_metric_value = str(active_customers)
+
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Toplam Siparis Sayisi", total_orders)
+        col2.metric("Bekleyen Siparisler", pending_orders)
+        col3.metric(third_metric_label, third_metric_value)
+
         with tab_orders:
             orders_query = """
                 SELECT o.id, c.customer_name, c.city, c.address, oi.product_name, oi.quantity, o.status FROM orders o JOIN customers c ON o.customer_id = c.id JOIN order_items oi ON o.id = oi.order_id ORDER BY o.id DESC
@@ -266,6 +311,25 @@ def render_admin_dashboard() -> None:
                     },
                     disabled=["id", "customer_name", "city", "address", "product_name", "quantity"],
                 )
+                status_badge_colors = {
+                    "Bekliyor": "#f59e0b",
+                    "Onaylandı": "#22c55e",
+                    "Reddedildi": "#ef4444",
+                    "Hazırlanıyor": "#3b82f6",
+                    "Kargoya Verildi": "#8b5cf6",
+                }
+                status_counts = edited_df["status"].value_counts().to_dict()
+                if status_counts:
+                    badges = "".join(
+                        (
+                            "<span style='display:inline-block;padding:6px 10px;margin:0 8px 8px 0;"
+                            f"border-radius:999px;background:{status_badge_colors.get(k, '#6b7280')};"
+                            "color:white;font-size:12px;font-weight:600;'>"
+                            f"{k}: {v}</span>"
+                        )
+                        for k, v in status_counts.items()
+                    )
+                    st.markdown(badges, unsafe_allow_html=True)
 
                 status_changes = edited_df.loc[
                     edited_df["status"] != orders_df["status"], ["id", "status"]
@@ -290,17 +354,69 @@ def apply_whatsapp_css() -> None:
     st.markdown(
         """
 <style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+html, body, [class*="css"], .stApp {
+    font-family: 'Inter', sans-serif !important;
+}
+
+.block-container {
+    max-width: 1120px !important;
+    padding-top: 1.2rem !important;
+    padding-bottom: 1rem !important;
+}
+
+[data-testid="stSidebar"] > div:first-child {
+    background: #f8fafc;
+}
+
+[data-testid="stSidebarNav"] {
+    margin-top: 0.35rem;
+}
+
 div[data-testid="stChatMessage"] {
-    border-radius: 14px;
-    padding: 0.35rem 0.2rem;
+    border-radius: 16px;
+    padding: 0.5rem 0.6rem;
+    margin: 0.45rem 0;
+    width: fit-content;
+    max-width: 78%;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
 }
 div[data-testid="stChatMessage"]:has(div[data-testid="chatAvatarIcon-assistant"]) {
-    background-color: #e9f8ea;
-    border: 1px solid #d5ebd6;
+    background-color: #f8fafc;
+    border: 1px solid #e2e8f0;
+    margin-right: auto;
 }
 div[data-testid="stChatMessage"]:has(div[data-testid="chatAvatarIcon-user"]) {
-    background-color: #ffffff;
-    border: 1px solid #e8e8e8;
+    background-color: #dcf8c6;
+    border: 1px solid #cdebb7;
+    margin-left: auto;
+}
+
+[data-testid="stChatMessageContent"] p {
+    margin-bottom: 0.2rem;
+}
+
+[data-testid="stChatInput"] {
+    margin-top: 0.35rem;
+}
+
+.stButton > button, .stFormSubmitButton > button, .stDownloadButton > button {
+    border-radius: 10px !important;
+    font-weight: 600 !important;
+    border: 1px solid #166534 !important;
+    background: #166534 !important;
+    color: #ffffff !important;
+}
+
+.stButton > button:hover, .stFormSubmitButton > button:hover, .stDownloadButton > button:hover {
+    background: #14532d !important;
+    border-color: #14532d !important;
+}
+
+h1 {
+    font-size: 2rem !important;
+    line-height: 1.2 !important;
 }
 </style>
 """,
@@ -404,7 +520,8 @@ def render_order_receipt(order_payload: dict[str, Any]) -> None:
 
 
 def render_chat() -> None:
-    st.title("OrderFlow AI - WhatsApp Business Simulasyonu")
+    st.title("OrderFlow AI | Isletme Yonetim Portali")
+    st.subheader("WhatsApp Simulasyonu")
     st.caption("Gemini destekli siparis asistani")
 
     for msg in st.session_state.messages:
@@ -454,9 +571,19 @@ def render_chat() -> None:
 
 def main() -> None:
     init_db()
-    st.set_page_config(page_title="OrderFlow AI", page_icon="💬", layout="centered")
+    st.set_page_config(page_title="OrderFlow AI | Isletme Yonetim Portali", page_icon="💬", layout="wide")
     ensure_state()
     apply_whatsapp_css()
+    st.sidebar.markdown(
+        """
+        <div style="padding:12px;border-radius:14px;background:#e2e8f0;margin-bottom:10px;">
+            <div style="font-size:28px;">🧾</div>
+            <div style="font-size:14px;font-weight:700;color:#0f172a;">OrderFlow AI</div>
+            <div style="font-size:12px;color:#334155;">Isletme Paneli</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
     page = st.sidebar.radio("Menu", ["💬 WhatsApp Simülasyonu", "📊 Admin Dashboard"], index=0)
 
     if page == "📊 Admin Dashboard":
