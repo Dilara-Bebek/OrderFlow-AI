@@ -101,16 +101,16 @@ def seed_sample_data(conn: sqlite3.Connection) -> None:
             VALUES (?, ?, ?, ?);
             """,
             [
-                ("Sucuklu Pizza (Buyuk)", "PIZZA-SUCUK-B", 320.0, 1),
-                ("Kola 1L", "DRINK-COLA-1L", 55.0, 1),
-                ("Sutlac", "DSRT-SUTLAC", 80.0, 1),
+                ("Limon Kolonyasi 250ml", "HEDIYE-KOLONYA-250", 120.0, 1),
+                ("El Kremi 50ml", "HEDIYE-KREM-50", 95.0, 1),
+                ("Zeytinyagli Sabun", "HEDIYE-SABUN-1", 70.0, 1),
             ],
         )
 
         cur.execute(
             """
             INSERT INTO orders (customer_id, status, total_amount)
-            SELECT c.id, 'pending', 695.0
+            SELECT c.id, 'pending', 405.0
             FROM customers c
             WHERE c.whatsapp_number = '+905551112233'
               AND NOT EXISTS (
@@ -138,23 +138,23 @@ def seed_sample_data(conn: sqlite3.Connection) -> None:
             cur.execute("SELECT COUNT(*) AS item_count FROM order_items WHERE order_id = ?;", (order_id,))
             item_count = cur.fetchone()["item_count"]
             if item_count == 0:
-                cur.execute("SELECT id, price FROM products WHERE sku = 'PIZZA-SUCUK-B';")
-                pizza = cur.fetchone()
-                cur.execute("SELECT id, price FROM products WHERE sku = 'DRINK-COLA-1L';")
-                cola = cur.fetchone()
-                cur.execute("SELECT id, price FROM products WHERE sku = 'DSRT-SUTLAC';")
-                sutlac = cur.fetchone()
+                cur.execute("SELECT id, price FROM products WHERE sku = 'HEDIYE-KOLONYA-250';")
+                kolonya = cur.fetchone()
+                cur.execute("SELECT id, price FROM products WHERE sku = 'HEDIYE-KREM-50';")
+                krem = cur.fetchone()
+                cur.execute("SELECT id, price FROM products WHERE sku = 'HEDIYE-SABUN-1';")
+                sabun = cur.fetchone()
 
-                if pizza and cola and sutlac:
+                if kolonya and krem and sabun:
                     cur.executemany(
                         """
                         INSERT INTO order_items (order_id, product_id, quantity, unit_price)
                         VALUES (?, ?, ?, ?);
                         """,
                         [
-                            (order_id, pizza["id"], 2, pizza["price"]),
-                            (order_id, cola["id"], 1, cola["price"]),
-                            (order_id, sutlac["id"], 1, sutlac["price"]),
+                            (order_id, kolonya["id"], 2, kolonya["price"]),
+                            (order_id, krem["id"], 1, krem["price"]),
+                            (order_id, sabun["id"], 1, sabun["price"]),
                         ],
                     )
 
