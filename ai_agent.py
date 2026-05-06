@@ -3,19 +3,19 @@ import os
 import re
 from typing import Any, Dict, List
 
-import google.generativeai as genai
+from google import genai
 
-
+# Lavora Natural marka kimligi ve SKU tanimlamalari
 SYSTEM_PROMPT = (
     "Sen Lavora Natural adında butik bir hediyelik eşya dükkanının sipariş "
     "asistanısın. Müşteri ürün istiyorsa şu SKU'larla eşleştir: "
     "Limon Kolonyası için HEDIYE-KOLONYA-250, El Kremi için HEDIYE-KREM-50, "
-    "Zeytinyağlı Sabun için HEDIYE-SABUN-1."
+    "Sabun için HEDIYE-SABUN-1."
 )
 
 
 def _extract_first_json_object(text: str) -> str:
-    """Return the first valid JSON object string found in model output."""
+    """Model ciktisi icindeki ilk gecerli JSON objesini bulur."""
     fenced = re.search(r"```json\s*(\{.*?\})\s*```", text, re.DOTALL)
     if fenced:
         return fenced.group(1)
@@ -28,7 +28,7 @@ def _extract_first_json_object(text: str) -> str:
 
 
 def _normalize_output(payload: Dict[str, Any]) -> Dict[str, Any]:
-    """Ensure response always includes required keys and stable types."""
+    """JSON anahtarlarinin ve veri tiplerinin kararli olmasini saglar."""
     intent = payload.get("intent", "")
     address = payload.get("address", "")
     phone = payload.get("phone", "")
@@ -58,26 +58,21 @@ def _normalize_output(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 def parse_whatsapp_message(message: str) -> Dict[str, Any]:
     """
-    Parse a complex WhatsApp customer message and return structured JSON:
-    {
-      "intent": str,
-      "products": list,
-      "address": str,
-      "phone": str
-    }
+    Karmasik WhatsApp mesajini analiz eder ve yapilandirilmis JSON doner.
     """
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
         return {
             "intent": "error",
+            "message": "GEMINI_API_KEY bulunamadi. Ortam degiskenini tanimlayin.",
             "products": [],
             "address": "",
             "phone": "",
         }
 
     try:
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel("gemini-1.5-flash")
+        # Modern SDK (google-genai) istemcisi API surum uyumlulugunu otomatik yonetir.
+        client = genai.Client(api_key=api_key)
 
         prompt = f"""
 Sistem mesajı:
@@ -100,18 +95,21 @@ Görevin:
   "address": "<string>",
   "phone": "<string>"
 }}
-- intent değeri şu tarz niyetlerden biri olmalı: siparis_olustur, durum_sorgula, sikayet, bilgi_talebi, diger.
-- products sadece SKU ve quantity içermeli, başka alan içermemeli.
-- Ekstra metin, markdown veya açıklama ekleme.
+- intent değeri: siparis_olustur, durum_sorgula, sikayet, bilgi_talebi veya diger olmalı.
+- products sadece SKU ve quantity içermeli.
+- Ekstra metin veya açıklama ekleme.
 """
 
-        response = model.generate_content(
-            prompt, generation_config={"response_mime_type": "application/json"}
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt,
+            config={"response_mime_type": "application/json"},
         )
-        raw_text = (response.text or "").strip()
-    except Exception:
+        raw_text = (getattr(response, "text", "") or "").strip()
+    except Exception as e:
         return {
             "intent": "error",
+            "error_detail": str(e),
             "products": [],
             "address": "",
             "phone": "",
@@ -130,3 +128,18 @@ Görevin:
             "address": "",
             "phone": "",
         }
+
+if __name__ == "__main__":
+    sample_message = (
+        "Merhabalar Lavora Natural ekibi! Ben Isparta'dan arıyorum. "
+        "Annem için 3 adet limon kolonyası ve kendime de 1 tane sabun "
+        "almak istiyorum. Adresim: Çünür Mahallesi, 102. Cadde No:5. "
+        "Telefonum: 05051234567. Yarın kargoya verebilir misiniz?"
+    )
+
+    print("\n" + "=" * 56)
+    print("Lavora Natural WhatsApp Mesaj Analizi")
+    print("=" * 56)
+    result = parse_whatsapp_message(sample_message)
+    print(json.dumps(result, indent=2, ensure_ascii=False))
+    print("=" * 56 + "\n")
