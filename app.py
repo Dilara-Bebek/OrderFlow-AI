@@ -336,13 +336,146 @@ def render_admin_dashboard() -> None:
                 ].drop_duplicates(subset=["id"], keep="last")
 
                 if not status_changes.empty:
-                    conn.executemany(
-                        "UPDATE orders SET status = ? WHERE id = ?",
-                        [(row["status"], int(row["id"])) for _, row in status_changes.iterrows()],
-                    )
-                    conn.commit()
-                    st.toast("Sipariş durumu başarıyla güncellendi!")
-                    st.rerun()
+                    def normalize_product_name(value: str) -> str:
+                        tr_map = str.maketrans(
+                            {
+                                "ç": "c",
+                                "Ç": "c",
+                                "ğ": "g",
+                                "Ğ": "g",
+                                "ı": "i",
+                                "İ": "i",
+                                "ö": "o",
+                                "Ö": "o",
+                                "ş": "s",
+                                "Ş": "s",
+                                "ü": "u",
+                                "Ü": "u",
+                            }
+                        )
+                        return value.translate(tr_map).lower().strip()
+
+                    updated_any = False
+                    for _, row in status_changes.iterrows():
+                        order_id = int(row["id"])
+                        new_status = str(row["status"])
+                        old_status = str(
+                            orders_df.loc[orders_df["id"] == order_id, "status"].iloc[0]
+                        )
+
+                        if new_status == "Onaylandı" and old_status != "Onaylandı":
+                            try:
+                                order_items = pd.read_sql_query(
+                                    """
+                                    SELECT product_name, quantity
+                                    FROM order_items
+                                    WHERE order_id = ?
+                                    """,
+                                    conn,
+                                    params=(order_id,),
+                                )
+
+                                stock_ok = True
+                                all_products_df = pd.read_sql_query(
+                                    "SELECT product_name, stock FROM products",
+                                    conn,
+                                )
+                                all_product_names = all_products_df["product_name"].astype(str).tolist()
+                                normalized_products = {
+                                    normalize_product_name(str(prod_name)): str(prod_name)
+                                    for prod_name in all_product_names
+                                }
+
+                                for _, item_row in order_items.iterrows():
+                                    product_name = str(item_row["product_name"])
+                                    order_quantity = int(item_row["quantity"])
+                                    normalized_order_product = normalize_product_name(product_name)
+                                    matched_product_name = normalized_products.get(normalized_order_product)
+
+                                    if not matched_product_name:
+                                        for candidate_name in all_product_names:
+                                            if normalized_order_product in normalize_product_name(candidate_name):
+                                                matched_product_name = candidate_name
+                                                break
+                                    if not matched_product_name:
+                                        for candidate_name in all_product_names:
+                                            if normalize_product_name(candidate_name) in normalized_order_product:
+                                                matched_product_name = candidate_name
+                                                break
+
+                                    if not matched_product_name:
+                                        print(
+                                            f"Aranan Ürün: {product_name}, "
+                                            f"Stoktaki Mevcut Ürünler: {all_product_names}"
+                                        )
+                                        stock_ok = False
+                                        break
+
+                                    stock_df = pd.read_sql_query(
+                                        "SELECT stock FROM products WHERE LOWER(product_name) LIKE LOWER(?)",
+                                        conn,
+                                        params=(f"%{matched_product_name}%",),
+                                    )
+                                    if stock_df.empty or int(stock_df.iloc[0]["stock"]) < order_quantity:
+                                        print(
+                                            f"Aranan Ürün: {product_name}, "
+                                            f"Stoktaki Mevcut Ürünler: {all_product_names}"
+                                        )
+                                        stock_ok = False
+                                        break
+
+                                if not stock_ok:
+                                    st.error("Yetersiz stok!")
+                                    continue
+
+                                for _, item_row in order_items.iterrows():
+                                    product_name = str(item_row["product_name"])
+                                    order_quantity = int(item_row["quantity"])
+                                    normalized_order_product = normalize_product_name(product_name)
+                                    matched_product_name = normalized_products.get(normalized_order_product)
+
+                                    if not matched_product_name:
+                                        for candidate_name in all_product_names:
+                                            if normalized_order_product in normalize_product_name(candidate_name):
+                                                matched_product_name = candidate_name
+                                                break
+                                    if not matched_product_name:
+                                        for candidate_name in all_product_names:
+                                            if normalize_product_name(candidate_name) in normalized_order_product:
+                                                matched_product_name = candidate_name
+                                                break
+                                    if not matched_product_name:
+                                        print(
+                                            f"Aranan Ürün: {product_name}, "
+                                            f"Stoktaki Mevcut Ürünler: {all_product_names}"
+                                        )
+                                        continue
+
+                                    conn.execute(
+                                        "UPDATE products SET stock = stock - ? WHERE LOWER(product_name) LIKE LOWER(?)",
+                                        (order_quantity, f"%{matched_product_name}%"),
+                                    )
+
+                                conn.execute(
+                                    "UPDATE orders SET status = ? WHERE id = ?",
+                                    (new_status, order_id),
+                                )
+                                conn.commit()
+                                updated_any = True
+                            except Exception:
+                                st.error("Stok guncelleme sirasinda hata olustu.")
+                                continue
+                        else:
+                            conn.execute(
+                                "UPDATE orders SET status = ? WHERE id = ?",
+                                (new_status, order_id),
+                            )
+                            conn.commit()
+                            updated_any = True
+
+                    if updated_any:
+                        st.toast("Sipariş durumu başarıyla güncellendi!")
+                        st.rerun()
 
         with tab_stock:
             stock_query = 'SELECT product_name as "Ürün Adı", stock as "Stok" FROM products'
