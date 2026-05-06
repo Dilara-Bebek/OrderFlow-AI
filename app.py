@@ -37,7 +37,7 @@ def configure_gemini() -> None:
 @st.cache_resource(show_spinner=False)
 def get_model() -> Any:
     configure_gemini()
-    model_name = os.getenv("GEMINI_MODEL", "gemini-1.5-flash").strip()
+    model = genai.GenerativeModel("gemini-pro")
     try:
         return genai.GenerativeModel(model_name=model_name, system_instruction=SYSTEM_PROMPT)
     except TypeError:
